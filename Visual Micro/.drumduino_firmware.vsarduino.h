@@ -39,11 +39,15 @@
 typedef unsigned char byte;
 extern "C" void __cxa_pure_virtual() {;}
 
-void multiplexSelectChan(uint8_t chan);
+inline void setPrescalers(byte i);
+inline void multiplexSelectChan(uint8_t chan);
 //
+inline void handleMessage(byte* msg, byte length);
+inline void input();
+inline void output();
 //
 
 #include "C:\Program Files (x86)\Arduino\hardware\arduino\avr\cores\arduino\arduino.h"
 #include "C:\Program Files (x86)\Arduino\hardware\arduino\avr\variants\standard\pins_arduino.h" 
-#include "C:\Users\micro_000\Documents\Arduino\drumduino_firmware\drumduino_firmware.ino"
+#include "C:\Users\micro_000\Desktop\github\drumduino_firmware\drumduino_firmware.ino"
 #endif
