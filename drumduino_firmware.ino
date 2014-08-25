@@ -21,7 +21,7 @@ inline void setPrescalers(byte i)
 	};
 
 	ADCSRA &= ~prescalers[6];
-	ADCSRA |= prescalers[0];
+	ADCSRA |= prescalers[2];
 }
 
 inline void multiplexSelectChan(uint8_t chan)
@@ -32,6 +32,7 @@ inline void multiplexSelectChan(uint8_t chan)
 struct SysexFrame {
 	byte begin;
 	byte manufacturer;
+	unsigned long time;
 	byte values[CHAN_CNT* PORT_CNT];
 	byte end;
 
@@ -45,8 +46,6 @@ struct SysexFrame {
 };
 
 SysexFrame _frame;
-byte _throttle = 1;
-byte _cnt = 0;
 
 void setup()
 {
@@ -66,37 +65,39 @@ void setup()
 	setPrescalers(2);
 }
 
-inline void handleMessage(byte* msg, byte length)
-{
-	switch(msg[0] && length == 3) {
-		case 0xff: {
-			setPrescalers(msg[1]);
-			_throttle = msg[2] != 0 ? msg[2] : 1;
-		}
-	}
-}
+//inline void handleMessage(byte* msg, byte length)
+//{
+//	switch(msg[0] && length == 3) {
+//		case 0xff: {
+//			setPrescalers(msg[1]);
+//			_throttle = msg[2] != 0 ? msg[2] : 1;
+//		}
+//	}
+//}
+//
+//inline void input()
+//{
+//	//read until we receive a sysex
+//	while(Serial.peek() >= 0 && Serial.peek() != 0xF0) {
+//		Serial.read();
+//	}
+//
+//	if(Serial.available() >= 6) {
+//		byte start = Serial.read();
+//		byte manufacturerId = Serial.read();
+//		byte deviceId = Serial.read();
+//		byte length = Serial.read();
+//		byte value[128];
+//
+//		if(length > 0) {
+//			Serial.readBytes(value, length);
+//			handleMessage(value, length);
+//		}
+//	}
+//}
 
-inline void input()
-{
-	//read until we receive a sysex
-	while(Serial.peek() >= 0 && Serial.peek() != 0xF0) {
-		Serial.read();
-	}
 
-	if(Serial.available() >= 6) {
-		byte start = Serial.read();
-		byte manufacturerId = Serial.read();
-		byte deviceId = Serial.read();
-		byte length = Serial.read();
-		byte value[128];
-
-		if(length > 0) {
-			Serial.readBytes(value, length);
-			handleMessage(value, length);
-		}
-	}
-}
-
+#define BURST_CNT 5
 
 inline void output()
 {
@@ -109,22 +110,24 @@ inline void output()
 
 			byte& value = *(_frame.values + channelNumber);
 
-			byte v = byte(analogRead(port) >> 3); //map [0..1023] -> [0..127]
+			value = 0;
 
-			value = (value > v) ? value : v;
+			for(uint8_t burst = 0; burst < BURST_CNT; ++burst) {
+				byte v = byte(analogRead(port) >> 3);
+
+				if(v > value) {
+					value = v;
+				}
+			}
 		}
 	}
 
-	if(_cnt % _throttle == 0) {
-		Serial.write((byte*)&_frame, sizeof(_frame));
-		memset(_frame.values, 0, sizeof(_frame.values));
-	}
-
-	++_cnt;
+	_frame.time = millis();
+	Serial.write((byte*)&_frame, sizeof(_frame));
 }
 
 void loop()
 {
-	input();
+	//input();
 	output();
 }

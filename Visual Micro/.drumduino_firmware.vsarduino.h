@@ -42,8 +42,6 @@ extern "C" void __cxa_pure_virtual() {;}
 inline void setPrescalers(byte i);
 inline void multiplexSelectChan(uint8_t chan);
 //
-inline void handleMessage(byte* msg, byte length);
-inline void input();
 inline void output();
 //
 
