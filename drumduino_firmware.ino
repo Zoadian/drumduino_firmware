@@ -5,23 +5,80 @@
 #define MULTIPLEX_PIN_B 3
 #define MULTIPLEX_PIN_C 4
 
+#ifndef cbi
+#define cbi(sfr, bit) (_SFR_BYTE(sfr) &= ~_BV(bit))
+#endif
+#ifndef sbi
+#define sbi(sfr, bit) (_SFR_BYTE(sfr) |= _BV(bit))
+#endif
 
 
-inline void setPrescalers(byte i)
+//=================================================================================
+// Prescaler
+//=================================================================================
+// Maximum sampling frequency    // Resolution
+#define Prescaler_2   B00000000 // 16 MHz / 2 = 8 MHz            //
+#define Prescaler_4   B00000010 // 16 MHz / 4 = 4 MHz            // ~5.9
+#define Prescaler_8   B00000011 // 16 MHz / 8 = 2 MHz            // ~7.4
+#define Prescaler_16  B00000100 // 16 MHz / 16 = 1 MHz           // ~8.6
+#define Prescaler_32  B00000101 // 16 MHz / 32 = 500 kHz         // ~8.9
+#define Prescaler_64  B00000110 // 16 MHz / 64 = 250 kHz         // ~9.0
+#define Prescaler_128 B00000111 // 16 MHz / 128 = 125 kHz        // ~9.1
+
+inline void setPrescaler(int prescaler)
 {
-	i = i % 7;
-	const byte prescalers[] = {
-		B00000000, // PS_2
-		B00000010, // PS_4
-		B00000011, // PS_8
-		B00000100, // PS_16
-		B00000101, // PS_32
-		B00000110, // PS_64
-		B00000111, // PS_128
-	};
+	ADCSRA &= B11111000;
+	ADCSRA |= prescaler;
+}
 
-	ADCSRA &= ~prescalers[6];
-	ADCSRA |= prescalers[2];
+
+//=================================================================================
+//  Adc Pin
+//=================================================================================
+#define AdPin_0   B00000000
+#define AdPin_1   B00000001
+#define AdPin_2   B00000010
+#define AdPin_3   B00000011
+#define AdPin_4   B00000100
+#define AdPin_5   B00000101
+#define AdPin_6   B00000110 // Bei Atmega8 nur in der Gehäusebauform TQFP und MLF verfügbar, nicht in PDIP
+#define AdPin_7   B00000111 // Bei Atmega8 nur in der Gehäusebauform TQFP und MLF verfügbar, nicht in PDIP
+#define AdPin_Vbg B00001110 // 1.23V
+#define AdPin_GND B00001111 // 0V
+
+inline void setAdPin(int adPin)
+{
+	ADMUX &= B11110000;
+	ADMUX |= adPin;
+}
+
+//=================================================================================
+// ADC Alignment
+//=================================================================================
+// Das Ergebnis wird in den Registern ADCH/ADCL linksbündig ausgerichtet.
+// Die 8 höchstwertigen Bits des Ergebnisses werden in ADCH abgelegt.
+// Die verbleibenden 2 niederwertigen Bits werden im Register ADCL in den Bits 6 und 7 abgelegt.
+#define ADAlignmentLeft  B00100000
+#define ADAlignmentRight B00000000
+
+
+inline void setADAlignment(int align)
+{
+	ADMUX &= ~B00100000;
+	ADMUX |= align;
+}
+
+//=================================================================================
+inline void startADCConversion()
+{
+	ADCSRA |= B01000000;
+}
+
+//=================================================================================
+
+inline void disableAnalogComparator()
+{
+	ACSR = B10000000;
 }
 
 inline void multiplexSelectChan(uint8_t chan)
@@ -32,7 +89,8 @@ inline void multiplexSelectChan(uint8_t chan)
 struct SysexFrame {
 	byte begin;
 	byte manufacturer;
-	unsigned long time;
+	unsigned long time1;
+	unsigned long time2;
 	byte values[CHAN_CNT* PORT_CNT];
 	byte end;
 
@@ -47,6 +105,9 @@ struct SysexFrame {
 
 SysexFrame _frame;
 
+
+
+
 void setup()
 {
 	// Setup MultiplexSelection Pins
@@ -54,53 +115,26 @@ void setup()
 	pinMode(MULTIPLEX_PIN_B, OUTPUT);
 	pinMode(MULTIPLEX_PIN_C, OUTPUT);
 
-	// Setup AD Pins
+	// Setup ADCs
 	analogReference(DEFAULT);
+	disableAnalogComparator();
+	setPrescaler(Prescaler_8);
+	//setADAlignment(ADAlignmentLeft);
+
+	// Disable digital input buffers on all analog input pins
+	DIDR0 = DIDR0 | B00111111;
 
 	// Setup Serial
-	Serial.begin(115200);
+	//Serial.begin(115200);
+	Serial.begin(2000000);
 	Serial.flush();
-
-	//Configure Prescaler
-	setPrescalers(2);
 }
 
-//inline void handleMessage(byte* msg, byte length)
-//{
-//	switch(msg[0] && length == 3) {
-//		case 0xff: {
-//			setPrescalers(msg[1]);
-//			_throttle = msg[2] != 0 ? msg[2] : 1;
-//		}
-//	}
-//}
-//
-//inline void input()
-//{
-//	//read until we receive a sysex
-//	while(Serial.peek() >= 0 && Serial.peek() != 0xF0) {
-//		Serial.read();
-//	}
-//
-//	if(Serial.available() >= 6) {
-//		byte start = Serial.read();
-//		byte manufacturerId = Serial.read();
-//		byte deviceId = Serial.read();
-//		byte length = Serial.read();
-//		byte value[128];
-//
-//		if(length > 0) {
-//			Serial.readBytes(value, length);
-//			handleMessage(value, length);
-//		}
-//	}
-//}
-
-
-#define BURST_CNT 5
 
 inline void output()
 {
+	_frame.time1 = micros();
+
 	for(uint8_t chan = 0; chan < CHAN_CNT; ++chan) {
 		multiplexSelectChan(chan);
 
@@ -109,20 +143,12 @@ inline void output()
 			int channelNumber = port * CHAN_CNT + chan;
 
 			byte& value = *(_frame.values + channelNumber);
-
-			value = 0;
-
-			for(uint8_t burst = 0; burst < BURST_CNT; ++burst) {
-				byte v = byte(analogRead(port) >> 3);
-
-				if(v > value) {
-					value = v;
-				}
-			}
+			
+			value = byte(analogRead(port) >> 3);
 		}
 	}
 
-	_frame.time = millis();
+	_frame.time2 = micros();
 	Serial.write((byte*)&_frame, sizeof(_frame));
 }
 

@@ -39,7 +39,11 @@
 typedef unsigned char byte;
 extern "C" void __cxa_pure_virtual() {;}
 
-inline void setPrescalers(byte i);
+inline void setPrescaler(int prescaler);
+inline void setAdPin(int adPin);
+inline void setADAlignment(int align);
+inline void startADCConversion();
+inline void disableAnalogComparator();
 inline void multiplexSelectChan(uint8_t chan);
 //
 inline void output();
