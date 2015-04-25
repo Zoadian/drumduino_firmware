@@ -1,8 +1,16 @@
 #include <SoftwareSerial.h>
 
+#define USE_DISPLAY 1
+
+#if USE_DISPLAY
+#include <LiquidCrystal.h>
+LiquidCrystal lcd(7, 8, 9, 10, 11, 12);
+#endif
+
+
 enum DrumduinoFirmwareSettings {
-	PORT_CNT = 6,
-	CHAN_PER_PORT_CNT = 8,
+	PORT_CNT = 1,
+	CHAN_PER_PORT_CNT = 1,
 	PAD_CNT = PORT_CNT * CHAN_PER_PORT_CNT,
 	FRAME_BUFFER_SIZE = 3,
 };
@@ -98,7 +106,7 @@ inline void disableAnalogComparator() {
 }
 
 inline void multiplexSelectChan(uint8_t chan) {
-	PORTD = B00011100 & (chan << 2);
+	PORTD = B00011100 & (chan << 2) | (B11100011 & PORTD);
 }
 
 //=================================================================================
@@ -118,62 +126,62 @@ namespace midi {
 #endif
 
 	/**
-	Note Off event. 
+	Note Off event.
 	This message is sent when a note is released (ended).
 	*/
 	template<typename SERIAL_IF>
-	void noteOn(SERIAL_IF& serial, int note, int velocity) {
-		serial.write(0x90);
-		serial.write(note);
-		serial.write(velocity);
+	void noteOn(SERIAL_IF& serial, uint8_t note, uint8_t velocity) {
+		serial.write((uint8_t)0x90);
+		serial.write((uint8_t)note);
+		serial.write((uint8_t)velocity);
 	}
 
 	/**
-	Note On event. 
+	Note On event.
 	This message is sent when a note is depressed (start).
 	*/
 	template<typename SERIAL_IF>
-	void noteOff(SERIAL_IF& serial, int note, int velocity) {
-		serial.write(0x80);
-		serial.write(note);
-		serial.write(velocity);
+	void noteOff(SERIAL_IF& serial, uint8_t note, uint8_t velocity) {
+		serial.write((uint8_t)0x80);
+		serial.write((uint8_t)note);
+		serial.write((uint8_t)velocity);
 	}
 
 	/**
-	Polyphonic Key Pressure (Aftertouch). 
-	This message is most often sent by pressing down on the key after it "bottoms out". 
+	Polyphonic Key Pressure (Aftertouch).
+	This message is most often sent by pressing down on the key after it "bottoms out".
 	*/
 	template<typename SERIAL_IF>
-	void polyphonicKeyPressure(SERIAL_IF& serial, int note, int pressure) {
-		serial.write(0xA0);
-		serial.write(note);
-		serial.write(pressure);
+	void polyphonicKeyPressure(SERIAL_IF& serial, uint8_t note, uint8_t pressure) {
+		serial.write((uint8_t)0xA0);
+		serial.write((uint8_t)note);
+		serial.write((uint8_t)pressure);
 	}
 
 	/**
-	Control Change. 
-	This message is sent when a controller value changes. 
-	Controllers include devices such as pedals and levers. 
+	Control Change.
+	This message is sent when a controller value changes.
+	Controllers include devices such as pedals and levers.
 	Controller numbers 120-127 are reserved as "Channel Mode Messages" (below).
 	*/
 	template<typename SERIAL_IF>
-	void controlChange(SERIAL_IF& serial, int controllerNumber, int controllerValue) {
-		serial.write(0xB0);
-		serial.write(controllerNumber);
-		serial.write(controllerValue);
+	void controlChange(SERIAL_IF& serial, uint8_t controllerNumber, uint8_t controllerValue) {
+		serial.write((uint8_t)0xB0);
+		serial.write((uint8_t)controllerNumber);
+		serial.write((uint8_t)controllerValue);
 	}
 }
 
 
 
 //=================================================================================
-// 
+//
 //=================================================================================
 struct Configuration {
 	enum Type {
 		TypeDisabled,
 		TypePiezo,
-	} type[PAD_CNT] = { TypeDisabled };
+	} type[PAD_CNT] = { TypePiezo };
 
 	struct CurveSettings {
 		enum CurveType {
@@ -200,7 +208,7 @@ struct Configuration {
 
 
 //=================================================================================
-// 
+//
 //=================================================================================
 struct Runtime {
 	SoftwareSerial softSerial{ PIN_SOFTSERIAL_RX, PIN_SOFTSERIAL_TX }; // RX, TX
@@ -218,11 +226,14 @@ struct Runtime {
 	//uint64_t sum[PAD_CNT] = { 0 };
 
 	uint64_t frameCounter = 0;
+#if USE_DISPLAY
+	bool displayTriggerEvent[PAD_CNT] = { 0 };
+#endif
 } g_runtime;
 
 
 //=================================================================================
-// 
+//
 //=================================================================================
 inline uint8_t calcCurve(const Configuration::CurveSettings& curveSettings, uint8_t value) {
 	uint8_t ret = 0;
@@ -230,40 +241,40 @@ inline uint8_t calcCurve(const Configuration::CurveSettings& curveSettings, uint
 	float x = value * 8.0;
 	float f = ((float)curveSettings.value) / 64.0; //[1;127]->[0.;2.0]
 
-	switch (curveSettings.type) {
+	switch(curveSettings.type) {
 		//[0-1023]x[0-127]
-	case Configuration::CurveSettings::CurveNormal:
-		ret = x * f / 16.0;
-		break;
+		case Configuration::CurveSettings::CurveNormal:
+			ret = x * f / 16.0;
+			break;
 
-	case Configuration::CurveSettings::CurveExp:
-		ret = (127.0 / (exp(2.0 * f) - 1)) * (exp(f * x / 512.0) - 1.0);
-		break; //Exp 4*(exp(x/256)-1)
+		case Configuration::CurveSettings::CurveExp:
+			ret = (127.0 / (exp(2.0 * f) - 1)) * (exp(f * x / 512.0) - 1.0);
+			break; //Exp 4*(exp(x/256)-1)
 
-	case Configuration::CurveSettings::CurveLog:
-		ret = log(1.0 + (f * x / 128.0)) * (127.0 / log((8 * f) + 1));
-		break; //Log 64*log(1+x/128)
+		case Configuration::CurveSettings::CurveLog:
+			ret = log(1.0 + (f * x / 128.0)) * (127.0 / log((8 * f) + 1));
+			break; //Log 64*log(1+x/128)
 
-	case Configuration::CurveSettings::CurveSigma:
-		ret = (127.0 / (1.0 + exp(f * (512.0 - x) / 64.0)));
-		break; //Sigma
+		case Configuration::CurveSettings::CurveSigma:
+			ret = (127.0 / (1.0 + exp(f * (512.0 - x) / 64.0)));
+			break; //Sigma
 
-	case Configuration::CurveSettings::CurveFlat:
-		ret = (64.0 - ((8.0 / f) * log((1024 / (1 + x)) - 1)));
-		break; //Flat
+		case Configuration::CurveSettings::CurveFlat:
+			ret = (64.0 - ((8.0 / f) * log((1024 / (1 + x)) - 1)));
+			break; //Flat
 
-	case Configuration::CurveSettings::CurveExtra:
-		ret = (x + 0x20) * f / 16.0;
+		case Configuration::CurveSettings::CurveExtra:
+			ret = (x + 0x20) * f / 16.0;
 
 	}
 
 	ret = ret * (curveSettings.factor / 127.0) + curveSettings.offset;
 
-	if (ret <= 0) {
+	if(ret <= 0) {
 		return 0;
 	}
 
-	if (ret >= 127) {
+	if(ret >= 127) {
 		return 127;    //127
 	}
 
@@ -272,9 +283,19 @@ inline uint8_t calcCurve(const Configuration::CurveSettings& curveSettings, uint
 
 
 //=================================================================================
-// 
+//
 //=================================================================================
 void setup() {
+#if USE_DISPLAY
+	lcd.begin(16, 2);
+	delay(500);
+	lcd.print("Drumduino  0.0.1");
+	delay(1000);
+#endif
+
+
+	memset(g_runtime.value, 0, sizeof(g_runtime.value));
+
 	// generate note mapping
 	for(uint8_t pad = 0; pad < PAD_CNT; ++pad) {
 		uint8_t note = 0x1E + pad;
@@ -300,19 +321,17 @@ void setup() {
 	Serial.flush();
 
 	g_runtime.softSerial.begin(31250);
-	g_runtime.softSerial.flush();
+	//g_runtime.softSerial.flush();
 }
 
 
 //=================================================================================
-// 
+//
 //=================================================================================
 void loop() {
 	uint64_t& frameCounter = g_runtime.frameCounter;
 	size_t curFrameIdx = frameCounter % FRAME_BUFFER_SIZE;
 	size_t lastFrameIdx = (frameCounter - 1) % FRAME_BUFFER_SIZE;
-
-	//unsigned long time1 = micros();
 
 	for(uint8_t chan = 0; chan < CHAN_PER_PORT_CNT; ++chan) {
 		multiplexSelectChan(chan);
@@ -369,8 +388,10 @@ STATE_AGAIN:
 
 							const uint8_t& note = g_configuration.note[pad];
 							midi::noteOn(g_runtime.softSerial, note, velocity);
-
 							state = Runtime::StateMask;
+#if USE_DISPLAY
+							g_runtime.displayTriggerEvent[pad] = true;
+#endif
 							//### fallthrough
 						}
 
@@ -381,7 +402,7 @@ STATE_AGAIN:
 							}
 
 							state = Runtime::StateAwait;
-							goto STATE_AGAIN;
+							//goto STATE_AGAIN;
 						}
 					}
 				}
@@ -389,7 +410,75 @@ STATE_AGAIN:
 		}
 	}
 
-	//unsigned long time2 = micros();
+#if USE_DISPLAY
+
+	if(frameCounter % 1000 == 0) {
+		lcd.clear();
+
+		lcd.setCursor(0, 0);
+
+		switch(g_configuration.type[0]) {
+			default:
+			case Configuration::TypeDisabled: {
+				lcd.print("Off");
+				break;
+			}
+
+			case Configuration::TypePiezo: {
+				lcd.print("Piez");
+				break;
+			}
+		}
+
+		lcd.setCursor(5, 0);
+		lcd.print(g_configuration.note[0]);
+		lcd.setCursor(9, 0);
+		lcd.print(g_configuration.scanTime[0]);
+		lcd.setCursor(13, 0);
+		lcd.print(g_configuration.threshold[0]);
+
+
+		lcd.setCursor(0, 1);
+		lcd.print("CurV:");
+		lcd.setCursor(6, 1);
+		lcd.print(g_runtime.value[0][curFrameIdx]);
+
+		lcd.setCursor(11, 1);
+
+		switch(g_runtime.state[0]) {
+			default:
+			case Runtime::StateAwait: {
+				lcd.print("A");
+				break;
+			}
+
+			case Runtime::StateScan: {
+				lcd.print("S");
+				break;
+			}
+
+			case Runtime::StateMask: {
+				lcd.print("M");
+				break;
+			}
+		}
+
+		lcd.setCursor(13, 1);
+
+		if(g_runtime.displayTriggerEvent[0]) {
+
+			lcd.print("[x]");
+		}
+		else {
+			lcd.print("[ ]");
+		}
+	}
+
+	if(frameCounter % 1000 == 0) {
+		memset(g_runtime.displayTriggerEvent, 0, sizeof(g_runtime.displayTriggerEvent));
+	}
+
+#endif
 
 	++frameCounter;
 }
